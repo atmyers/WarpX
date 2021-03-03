@@ -1874,16 +1874,16 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
 
         scaleFields(xp, yp, zp, Exp, Eyp, Ezp, Bxp, Byp, Bzp);
 
-        doParticlePush(getPosition, setPosition, copyAttribs, ip,
-                       ux[ip+offset], uy[ip+offset], uz[ip+offset],
-                       Exp, Eyp, Ezp, Bxp, Byp, Bzp,
-                       ion_lev ? ion_lev[ip] : 0,
-                       m, q, pusher_algo, do_crr, do_copy,
-#ifdef WARPX_QED
-                       do_sync,
-                       t_chi_max,
-#endif
-                       dt);
+//         doParticlePush(getPosition, setPosition, copyAttribs, ip,
+//                        ux[ip+offset], uy[ip+offset], uz[ip+offset],
+//                        Exp, Eyp, Ezp, Bxp, Byp, Bzp,
+//                        ion_lev ? ion_lev[ip] : 0,
+//                        m, q, pusher_algo, do_crr, do_copy,
+// #ifdef WARPX_QED
+//                        do_sync,
+//                        t_chi_max,
+// #endif
+//                        dt);
 
 #ifdef WARPX_QED
     if (local_has_quantum_sync) {
