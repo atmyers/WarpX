@@ -339,8 +339,6 @@ WarpXParticleContainer::DepositCurrent(WarpXParIter& pti,
     Array4<Real> const& jz_arr = local_jz[thread_num].array();
 #endif
 
-    const auto GetPosition = GetParticlePosition(pti, offset);
-
     // Lower corner of tile box physical domain
     // Note that this includes guard cells since it is after tilebox.ngrow
     const Dim3 lo = lbound(tilebox);
@@ -459,6 +457,8 @@ WarpXParticleContainer::DepositCurrent(WarpXParIter& pti,
     WARPX_PROFILE_VAR_START(blp_deposit);
     amrex::LayoutData<amrex::Real>* costs = WarpX::getCosts(lev);
     amrex::Real* cost = costs ? &((*costs)[pti.index()]) : nullptr;
+
+    const auto GetPosition = GetParticlePosition(pti, offset);
 
     if (WarpX::current_deposition_algo == CurrentDepositionAlgo::Esirkepov) {
         if        (WarpX::nox == 1){

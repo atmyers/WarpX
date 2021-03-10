@@ -1052,9 +1052,9 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
 
     std::size_t shared_mem_bytes = npts*sizeof(double);
     amrex::launch(
-        nblocks, threads_per_block, shared_mem_bytes, amrex::Gpu::gpuStream(),
-        [=] AMREX_GPU_DEVICE () noexcept
-        {
+       nblocks, threads_per_block, shared_mem_bytes, amrex::Gpu::gpuStream(),
+       [=] AMREX_GPU_DEVICE () noexcept
+       {
 #if (defined AMREX_USE_GPU)
             KernelTimer KnlTimer(cost && load_balance_costs_update_algo
                                  == LoadBalanceCostsUpdateAlgo::GpuClock, cost_real);
