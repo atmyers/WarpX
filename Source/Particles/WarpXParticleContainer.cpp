@@ -298,11 +298,15 @@ WarpXParticleContainer::DepositCurrent(WarpXParIter& pti,
         tilebox = amrex::coarsen(pti.tilebox(),ref_ratio);
     }
 
+    const auto jx_type = jx->ixType().toIntVect();
+    const auto jy_type = jy->ixType().toIntVect();
+    const auto jz_type = jz->ixType().toIntVect();
+
 #ifndef AMREX_USE_GPU
     // Staggered tile boxes (different in each direction)
-    Box tbx = convert( tilebox, jx->ixType().toIntVect() );
-    Box tby = convert( tilebox, jy->ixType().toIntVect() );
-    Box tbz = convert( tilebox, jz->ixType().toIntVect() );
+    Box tbx = convert( tilebox, jx_type );
+    Box tby = convert( tilebox, jy_type );
+    Box tbz = convert( tilebox, jz_type );
 #endif
 
     tilebox.grow(ng_J);
@@ -465,21 +469,24 @@ WarpXParticleContainer::DepositCurrent(WarpXParIter& pti,
             doEsirkepovDepositionShapeNShared<1>(
                 GetPosition, wp.dataPtr() + offset, uxp.dataPtr() + offset,
                 uyp.dataPtr() + offset, uzp.dataPtr() + offset, ion_lev,
-                jx_arr, jy_arr, jz_arr, np_to_depose, dt, dx, xyzmin, lo, q,
+                jx_arr, jy_arr, jz_arr, jx_type, jy_type, jz_type,
+                np_to_depose, dt, dx, xyzmin, lo, q,
                 WarpX::n_rz_azimuthal_modes, cost,
                 WarpX::load_balance_costs_update_algo, bins, tboxes, max_tbox_size);
         } else if (WarpX::nox == 2){
             doEsirkepovDepositionShapeNShared<2>(
                 GetPosition, wp.dataPtr() + offset, uxp.dataPtr() + offset,
                 uyp.dataPtr() + offset, uzp.dataPtr() + offset, ion_lev,
-                jx_arr, jy_arr, jz_arr, np_to_depose, dt, dx, xyzmin, lo, q,
+                jx_arr, jy_arr, jz_arr, jx_type, jy_type, jz_type,
+                np_to_depose, dt, dx, xyzmin, lo, q,
                 WarpX::n_rz_azimuthal_modes, cost,
                 WarpX::load_balance_costs_update_algo, bins, tboxes, max_tbox_size);
         } else if (WarpX::nox == 3){
             doEsirkepovDepositionShapeNShared<3>(
                 GetPosition, wp.dataPtr() + offset, uxp.dataPtr() + offset,
                 uyp.dataPtr() + offset, uzp.dataPtr() + offset, ion_lev,
-                jx_arr, jy_arr, jz_arr, np_to_depose, dt, dx, xyzmin, lo, q,
+                jx_arr, jy_arr, jz_arr, jx_type, jy_type, jz_type,
+                np_to_depose, dt, dx, xyzmin, lo, q,
                 WarpX::n_rz_azimuthal_modes, cost,
                 WarpX::load_balance_costs_update_algo, bins, tboxes, max_tbox_size);
         }

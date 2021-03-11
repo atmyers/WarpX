@@ -987,6 +987,9 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                                         const amrex::Array4<amrex::Real>& Jx_arr,
                                         const amrex::Array4<amrex::Real>& Jy_arr,
                                         const amrex::Array4<amrex::Real>& Jz_arr,
+                                        const amrex::IntVect& jx_type,
+                                        const amrex::IntVect& jy_type,
+                                        const amrex::IntVect& jz_type,
                                         const long np_to_depose,
                                         const amrex::Real dt,
                                         const std::array<amrex::Real,3>& dx,
@@ -1046,10 +1049,21 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
     const auto offsets_ptr = a_bins.offsetsPtr();
     const auto tbox_ptr = a_tboxes.dataPtr();
     const int threads_per_block = 128;
-    const auto npts = AMREX_D_TERM((a_tbox_max_size[0]+2*depos_order),
-                                  *(a_tbox_max_size[1]+2*depos_order),
-                                  *(a_tbox_max_size[2]+2*depos_order));
 
+    const amrex::Box sample_tbox(IntVect(AMREX_D_DECL(0, 0, 0)), a_tbox_max_size - 1);
+    amrex::Box sample_tbox_x = convert(sample_tbox, jx_type);
+    amrex::Box sample_tbox_y = convert(sample_tbox, jy_type);
+    amrex::Box sample_tbox_z = convert(sample_tbox, jz_type);
+
+    sample_tbox_x.grow(depos_order);
+    sample_tbox_y.grow(depos_order);
+    sample_tbox_z.grow(depos_order);
+
+    const auto npts_x = sample_tbox_x.numPts();
+    const auto npts_y = sample_tbox_y.numPts();
+    const auto npts_z = sample_tbox_z.numPts();
+
+    const auto npts = npts_x + npts_y + npts_z;
     std::size_t shared_mem_bytes = npts*sizeof(double);
     amrex::launch(
        nblocks, threads_per_block, shared_mem_bytes, amrex::Gpu::gpuStream(),
@@ -1062,6 +1076,78 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
             const int bin_id = blockIdx.x;
             const int bin_start = offsets_ptr[bin_id];
             const int bin_stop = offsets_ptr[bin_id+1];
+
+            amrex::Box buffer_box = tbox_ptr[bin_id];
+
+            Box tbx = convert( buffer_box, jx_type );
+            Box tby = convert( buffer_box, jy_type );
+            Box tbz = convert( buffer_box, jz_type );
+
+            tbx.grow(depos_order);
+            tby.grow(depos_order);
+            tbz.grow(depos_order);
+
+            Gpu::SharedMemory<amrex::Real> gsm;
+            amrex::Real* const shared = gsm.dataPtr();
+            amrex::Array4<amrex::Real> xbuf(shared,
+                                            amrex::begin(tbx), amrex::end(tbx), 1);
+            amrex::Array4<amrex::Real> ybuf(shared + npts_x,
+                                            amrex::begin(tby), amrex::end(tby), 1);
+            amrex::Array4<amrex::Real> zbuf(shared + npts_x+npts_y,
+                                            amrex::begin(tbz), amrex::end(tbz), 1);
+
+            // Zero out shared memory buffer
+            // loop over x
+            {
+                const auto lo  = amrex::lbound(tbx);
+                const auto len = amrex::length(tbx);
+                for (int icell = threadIdx.x; icell < tbx.numPts(); icell += blockDim.x)
+                {
+                    int k =  icell / (len.x*len.y);
+                    int j = (icell - k*(len.x*len.y)) /   len.x;
+                    int i = (icell - k*(len.x*len.y)) - j*len.x;
+                    i += lo.x;
+                    j += lo.y;
+                    k += lo.z;
+                    xbuf(i, j, k) = 0.0;
+                }
+            }
+
+            // loop over y
+            {
+                const auto lo  = amrex::lbound(tby);
+                const auto len = amrex::length(tby);
+                for (int icell = threadIdx.x; icell < tby.numPts(); icell += blockDim.x)
+                {
+                    int k =  icell / (len.x*len.y);
+                    int j = (icell - k*(len.x*len.y)) /   len.x;
+                    int i = (icell - k*(len.x*len.y)) - j*len.x;
+                    i += lo.x;
+                    j += lo.y;
+                    k += lo.z;
+                    ybuf(i, j, k) = 0.0;
+                }
+            }
+
+            // loop over z
+            {
+                const auto lo  = amrex::lbound(tbz);
+                const auto len = amrex::length(tbz);
+                for (int icell = threadIdx.x; icell < tbz.numPts(); icell += blockDim.x)
+                {
+                    int k =  icell / (len.x*len.y);
+                    int j = (icell - k*(len.x*len.y)) /   len.x;
+                    int i = (icell - k*(len.x*len.y)) - j*len.x;
+                    i += lo.x;
+                    j += lo.y;
+                    k += lo.z;
+                    zbuf(i, j, k) = 0.0;
+                }
+            }
+
+            __syncthreads();
+
+            // loop over particles and deposit to shared buffer
             for (unsigned int ip = bin_start + threadIdx.x; ip < bin_stop; ip += blockDim.x)
             {
 
@@ -1197,7 +1283,7 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                     for (int i=dil; i<=depos_order+1-diu; i++) {
                         sdxi += wqx*(sx_old[i] - sx_new[i])*((sy_new[j] + 0.5_rt*(sy_old[j] - sy_new[j]))*sz_new[k] +
                                                              (0.5_rt*sy_new[j] + 1._rt/3._rt*(sy_old[j] - sy_new[j]))*(sz_old[k] - sz_new[k]));
-                        amrex::Gpu::Atomic::AddNoRet( &Jx_arr(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k), sdxi);
+                        amrex::Gpu::Atomic::AddNoRet( &xbuf(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k), sdxi);
                     }
                 }
             }
@@ -1207,7 +1293,7 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                     for (int j=djl; j<=depos_order+1-dju; j++) {
                         sdyj += wqy*(sy_old[j] - sy_new[j])*((sz_new[k] + 0.5_rt*(sz_old[k] - sz_new[k]))*sx_new[i] +
                                                              (0.5_rt*sz_new[k] + 1._rt/3._rt*(sz_old[k] - sz_new[k]))*(sx_old[i] - sx_new[i]));
-                        amrex::Gpu::Atomic::AddNoRet( &Jy_arr(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k), sdyj);
+                        amrex::Gpu::Atomic::AddNoRet( &ybuf(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k), sdyj);
                     }
                 }
             }
@@ -1217,7 +1303,7 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                     for (int k=dkl; k<=depos_order+1-dku; k++) {
                         sdzk += wqz*(sz_old[k] - sz_new[k])*((sx_new[i] + 0.5_rt*(sx_old[i] - sx_new[i]))*sy_new[j] +
                                                              (0.5_rt*sx_new[i] + 1._rt/3._rt*(sx_old[i] - sx_new[i]))*(sy_old[j] - sy_new[j]));
-                        amrex::Gpu::Atomic::AddNoRet( &Jz_arr(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k), sdzk);
+                        amrex::Gpu::Atomic::AddNoRet( &zbuf(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k), sdzk);
                     }
                 }
             }
@@ -1228,14 +1314,14 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                 amrex::Real sdxi = 0._rt;
                 for (int i=dil; i<=depos_order+1-diu; i++) {
                     sdxi += wqx*(sx_old[i] - sx_new[i])*(sz_new[k] + 0.5_rt*(sz_old[k] - sz_new[k]));
-                    amrex::Gpu::Atomic::AddNoRet( &Jx_arr(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 0), sdxi);
+                    amrex::Gpu::Atomic::AddNoRet( &xbuf(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 0), sdxi);
 #if (defined WARPX_DIM_RZ)
                     Complex xy_mid = xy_mid0; // Throughout the following loop, xy_mid takes the value e^{i m theta}
                     for (int imode=1 ; imode < n_rz_azimuthal_modes ; imode++) {
                         // The factor 2 comes from the normalization of the modes
                         const Complex djr_cmplx = 2._rt *sdxi*xy_mid;
-                        amrex::Gpu::Atomic::AddNoRet( &Jx_arr(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode-1), djr_cmplx.real());
-                        amrex::Gpu::Atomic::AddNoRet( &Jx_arr(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode), djr_cmplx.imag());
+                        amrex::Gpu::Atomic::AddNoRet( &xbuf(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode-1), djr_cmplx.real());
+                        amrex::Gpu::Atomic::AddNoRet( &xbuf(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode), djr_cmplx.imag());
                         xy_mid = xy_mid*xy_mid0;
                     }
 #endif
@@ -1245,7 +1331,7 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                 for (int i=dil; i<=depos_order+2-diu; i++) {
                     Real const sdyj = wq*vy*invvol*((sz_new[k] + 0.5_rt * (sz_old[k] - sz_new[k]))*sx_new[i] +
                                                            (0.5_rt * sz_new[k] + 1._rt / 3._rt *(sz_old[k] - sz_new[k]))*(sx_old[i] - sx_new[i]));
-                    amrex::Gpu::Atomic::AddNoRet( &Jy_arr(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 0), sdyj);
+                    amrex::Gpu::Atomic::AddNoRet( &ybuf(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 0), sdyj);
 #if (defined WARPX_DIM_RZ)
                     Complex xy_new = xy_new0;
                     Complex xy_mid = xy_mid0;
@@ -1257,8 +1343,8 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                         const Complex djt_cmplx = -2._rt * I*(i_new-1 + i + xmin*dxi)*wq*invdtdx/(amrex::Real)imode
                                                   *(Complex(sx_new[i]*sz_new[k], 0.)*(xy_new - xy_mid)
                                                   + Complex(sx_old[i]*sz_old[k], 0.)*(xy_mid - xy_old));
-                        amrex::Gpu::Atomic::AddNoRet( &Jy_arr(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode-1), djt_cmplx.real());
-                        amrex::Gpu::Atomic::AddNoRet( &Jy_arr(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode), djt_cmplx.imag());
+                        amrex::Gpu::Atomic::AddNoRet( &ybuf(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode-1), djt_cmplx.real());
+                        amrex::Gpu::Atomic::AddNoRet( &ybuf(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode), djt_cmplx.imag());
                         xy_new = xy_new*xy_new0;
                         xy_mid = xy_mid*xy_mid0;
                         xy_old = xy_old*xy_old0;
@@ -1270,14 +1356,14 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                 Real sdzk = 0._rt;
                 for (int k=dkl; k<=depos_order+1-dku; k++) {
                     sdzk += wqz*(sz_old[k] - sz_new[k])*(sx_new[i] + 0.5_rt * (sx_old[i] - sx_new[i]));
-                    amrex::Gpu::Atomic::AddNoRet( &Jz_arr(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 0), sdzk);
+                    amrex::Gpu::Atomic::AddNoRet( &zbuf(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 0), sdzk);
 #if (defined WARPX_DIM_RZ)
                     Complex xy_mid = xy_mid0; // Throughout the following loop, xy_mid takes the value e^{i m theta}
                     for (int imode=1 ; imode < n_rz_azimuthal_modes ; imode++) {
                         // The factor 2 comes from the normalization of the modes
                         const Complex djz_cmplx = 2._rt * sdzk * xy_mid;
-                        amrex::Gpu::Atomic::AddNoRet( &Jz_arr(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode-1), djz_cmplx.real());
-                        amrex::Gpu::Atomic::AddNoRet( &Jz_arr(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode), djz_cmplx.imag());
+                        amrex::Gpu::Atomic::AddNoRet( &zbuf(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode-1), djz_cmplx.real());
+                        amrex::Gpu::Atomic::AddNoRet( &zbuf(lo.x+i_new-1+i, lo.y+k_new-1+k, 0, 2*imode), djz_cmplx.imag());
                         xy_mid = xy_mid*xy_mid0;
                     }
 #endif
@@ -1285,7 +1371,59 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
             }
 #endif
             }
-        }
+
+            __syncthreads();
+
+            // add from shared back to global
+
+            // loop over x
+            {
+                const auto lo  = amrex::lbound(tbx);
+                const auto len = amrex::length(tbx);
+                for (int icell = threadIdx.x; icell < tbx.numPts(); icell += blockDim.x)
+                {
+                    int k =  icell / (len.x*len.y);
+                    int j = (icell - k*(len.x*len.y)) /   len.x;
+                    int i = (icell - k*(len.x*len.y)) - j*len.x;
+                    i += lo.x;
+                    j += lo.y;
+                    k += lo.z;
+                    amrex::Gpu::Atomic::AddNoRet( &Jx_arr(i, j, k), xbuf(i, j, k));
+                }
+            }
+
+            // loop over y
+            {
+                const auto lo  = amrex::lbound(tby);
+                const auto len = amrex::length(tby);
+                for (int icell = threadIdx.x; icell < tby.numPts(); icell += blockDim.x)
+                {
+                    int k =  icell / (len.x*len.y);
+                    int j = (icell - k*(len.x*len.y)) /   len.x;
+                    int i = (icell - k*(len.x*len.y)) - j*len.x;
+                    i += lo.x;
+                    j += lo.y;
+                    k += lo.z;
+                    amrex::Gpu::Atomic::AddNoRet( &Jy_arr(i, j, k), ybuf(i, j, k));
+                }
+            }
+
+            // loop over z
+            {
+                const auto lo  = amrex::lbound(tbz);
+                const auto len = amrex::length(tbz);
+                for (int icell = threadIdx.x; icell < tbz.numPts(); icell += blockDim.x)
+                {
+                    int k =  icell / (len.x*len.y);
+                    int j = (icell - k*(len.x*len.y)) /   len.x;
+                    int i = (icell - k*(len.x*len.y)) - j*len.x;
+                    i += lo.x;
+                    j += lo.y;
+                    k += lo.z;
+                    amrex::Gpu::Atomic::AddNoRet( &Jz_arr(i, j, k), zbuf(i, j, k));
+                }
+            }
+       }
     );
     amrex::The_Managed_Arena()->free(cost_real);
 }
