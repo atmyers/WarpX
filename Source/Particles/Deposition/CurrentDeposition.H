@@ -954,6 +954,44 @@ void doVayDepositionShapeN (const GetParticlePosition& GetPosition,
 #endif // #if !(defined WARPX_DIM_RZ)
 }
 
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+void addLocalToGlobal (const amrex::Box& bx,
+                       const amrex::Array4<amrex::Real>& global,
+                       const amrex::Array4<amrex::Real>& local) noexcept
+{
+    const auto lo  = amrex::lbound(bx);
+    const auto len = amrex::length(bx);
+    for (int icell = threadIdx.x; icell < bx.numPts(); icell += blockDim.x)
+    {
+        int k =  icell / (len.x*len.y);
+        int j = (icell - k*(len.x*len.y)) /   len.x;
+        int i = (icell - k*(len.x*len.y)) - j*len.x;
+        i += lo.x;
+        j += lo.y;
+        k += lo.z;
+        amrex::Gpu::Atomic::AddNoRet( &global(i, j, k), local(i, j, k));
+    }
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+void setValBox (const amrex::Box& bx,
+                const amrex::Array4<amrex::Real>& arr,
+                const amrex::Real val) noexcept
+{
+    const auto lo  = amrex::lbound(bx);
+    const auto len = amrex::length(bx);
+    for (int icell = threadIdx.x; icell < bx.numPts(); icell += blockDim.x)
+    {
+        int k =  icell / (len.x*len.y);
+        int j = (icell - k*(len.x*len.y)) /   len.x;
+        int i = (icell - k*(len.x*len.y)) - j*len.x;
+        i += lo.x;
+        j += lo.y;
+        k += lo.z;
+        arr(i, j, k) = val;
+    }
+}
+
 /**
  * \brief Esirkepov Current Deposition for thread thread_num
  *
@@ -1089,61 +1127,14 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
 
             Gpu::SharedMemory<amrex::Real> gsm;
             amrex::Real* const shared = gsm.dataPtr();
-            amrex::Array4<amrex::Real> xbuf(shared,
-                                            amrex::begin(tbx), amrex::end(tbx), 1);
-            amrex::Array4<amrex::Real> ybuf(shared + npts_x,
-                                            amrex::begin(tby), amrex::end(tby), 1);
-            amrex::Array4<amrex::Real> zbuf(shared + npts_x+npts_y,
-                                            amrex::begin(tbz), amrex::end(tbz), 1);
+            amrex::Array4<amrex::Real> xbuf(shared, amrex::begin(tbx), amrex::end(tbx), 1);
+            amrex::Array4<amrex::Real> ybuf(shared + npts_x, amrex::begin(tby), amrex::end(tby), 1);
+            amrex::Array4<amrex::Real> zbuf(shared + npts_x+npts_y, amrex::begin(tbz), amrex::end(tbz), 1);
 
-            // Zero out shared memory buffer
-            // loop over x
-            {
-                const auto lo  = amrex::lbound(tbx);
-                const auto len = amrex::length(tbx);
-                for (int icell = threadIdx.x; icell < tbx.numPts(); icell += blockDim.x)
-                {
-                    int k =  icell / (len.x*len.y);
-                    int j = (icell - k*(len.x*len.y)) /   len.x;
-                    int i = (icell - k*(len.x*len.y)) - j*len.x;
-                    i += lo.x;
-                    j += lo.y;
-                    k += lo.z;
-                    xbuf(i, j, k) = 0.0;
-                }
-            }
-
-            // loop over y
-            {
-                const auto lo  = amrex::lbound(tby);
-                const auto len = amrex::length(tby);
-                for (int icell = threadIdx.x; icell < tby.numPts(); icell += blockDim.x)
-                {
-                    int k =  icell / (len.x*len.y);
-                    int j = (icell - k*(len.x*len.y)) /   len.x;
-                    int i = (icell - k*(len.x*len.y)) - j*len.x;
-                    i += lo.x;
-                    j += lo.y;
-                    k += lo.z;
-                    ybuf(i, j, k) = 0.0;
-                }
-            }
-
-            // loop over z
-            {
-                const auto lo  = amrex::lbound(tbz);
-                const auto len = amrex::length(tbz);
-                for (int icell = threadIdx.x; icell < tbz.numPts(); icell += blockDim.x)
-                {
-                    int k =  icell / (len.x*len.y);
-                    int j = (icell - k*(len.x*len.y)) /   len.x;
-                    int i = (icell - k*(len.x*len.y)) - j*len.x;
-                    i += lo.x;
-                    j += lo.y;
-                    k += lo.z;
-                    zbuf(i, j, k) = 0.0;
-                }
-            }
+            // Zero out shared memory buffers
+            setValBox(tbx, xbuf, 0.0);
+            setValBox(tbx, ybuf, 0.0);
+            setValBox(tbx, zbuf, 0.0);
 
             __syncthreads();
 
@@ -1375,54 +1366,9 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
             __syncthreads();
 
             // add from shared back to global
-
-            // loop over x
-            {
-                const auto lo  = amrex::lbound(tbx);
-                const auto len = amrex::length(tbx);
-                for (int icell = threadIdx.x; icell < tbx.numPts(); icell += blockDim.x)
-                {
-                    int k =  icell / (len.x*len.y);
-                    int j = (icell - k*(len.x*len.y)) /   len.x;
-                    int i = (icell - k*(len.x*len.y)) - j*len.x;
-                    i += lo.x;
-                    j += lo.y;
-                    k += lo.z;
-                    amrex::Gpu::Atomic::AddNoRet( &Jx_arr(i, j, k), xbuf(i, j, k));
-                }
-            }
-
-            // loop over y
-            {
-                const auto lo  = amrex::lbound(tby);
-                const auto len = amrex::length(tby);
-                for (int icell = threadIdx.x; icell < tby.numPts(); icell += blockDim.x)
-                {
-                    int k =  icell / (len.x*len.y);
-                    int j = (icell - k*(len.x*len.y)) /   len.x;
-                    int i = (icell - k*(len.x*len.y)) - j*len.x;
-                    i += lo.x;
-                    j += lo.y;
-                    k += lo.z;
-                    amrex::Gpu::Atomic::AddNoRet( &Jy_arr(i, j, k), ybuf(i, j, k));
-                }
-            }
-
-            // loop over z
-            {
-                const auto lo  = amrex::lbound(tbz);
-                const auto len = amrex::length(tbz);
-                for (int icell = threadIdx.x; icell < tbz.numPts(); icell += blockDim.x)
-                {
-                    int k =  icell / (len.x*len.y);
-                    int j = (icell - k*(len.x*len.y)) /   len.x;
-                    int i = (icell - k*(len.x*len.y)) - j*len.x;
-                    i += lo.x;
-                    j += lo.y;
-                    k += lo.z;
-                    amrex::Gpu::Atomic::AddNoRet( &Jz_arr(i, j, k), zbuf(i, j, k));
-                }
-            }
+            addLocalToGlobal(tbx, Jx_arr, xbuf);
+            addLocalToGlobal(tby, Jy_arr, ybuf);
+            addLocalToGlobal(tbz, Jz_arr, zbuf);
        }
     );
     amrex::The_Managed_Arena()->free(cost_real);
