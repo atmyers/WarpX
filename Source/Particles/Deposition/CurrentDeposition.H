@@ -1133,8 +1133,8 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
 
             // Zero out shared memory buffers
             setValBox(tbx, xbuf, 0.0);
-            setValBox(tbx, ybuf, 0.0);
-            setValBox(tbx, zbuf, 0.0);
+            setValBox(tby, ybuf, 0.0);
+            setValBox(tbz, zbuf, 0.0);
 
             __syncthreads();
 
