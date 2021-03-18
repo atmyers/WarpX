@@ -107,10 +107,10 @@ void doDepositionShapeN(const GetParticlePosition& GetPosition,
     amrex::ParallelFor(
         np_to_depose,
         [=] AMREX_GPU_DEVICE (long ip) {
-#if (defined AMREX_USE_GPU)
-            KernelTimer KnlTimer(cost && load_balance_costs_update_algo
-                                 == LoadBalanceCostsUpdateAlgo::GpuClock, cost_real);
-#endif
+            #if (defined AMREX_USE_GPU)
+                       KernelTimer KnlTimer(cost && load_balance_costs_update_algo
+                                            == LoadBalanceCostsUpdateAlgo::GpuClock, cost_real);
+            #endif
             // --- Get particle quantities
             const amrex::Real gaminv = 1.0/std::sqrt(1.0 + uxp[ip]*uxp[ip]*clightsq
                                                          + uyp[ip]*uyp[ip]*clightsq
@@ -973,25 +973,6 @@ void addLocalToGlobal (const amrex::Box& bx,
     }
 }
 
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-void setValBox (const amrex::Box& bx,
-                const amrex::Array4<amrex::Real>& arr,
-                const amrex::Real val) noexcept
-{
-    const auto lo  = amrex::lbound(bx);
-    const auto len = amrex::length(bx);
-    for (int icell = threadIdx.x; icell < bx.numPts(); icell += blockDim.x)
-    {
-        int k =  icell / (len.x*len.y);
-        int j = (icell - k*(len.x*len.y)) /   len.x;
-        int i = (icell - k*(len.x*len.y)) - j*len.x;
-        i += lo.x;
-        j += lo.y;
-        k += lo.z;
-        arr(i, j, k) = val;
-    }
-}
-
 /**
  * \brief Esirkepov Current Deposition for thread thread_num
  *
@@ -1086,7 +1067,7 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
     const int nblocks = a_bins.numBins();
     const auto offsets_ptr = a_bins.offsetsPtr();
     const auto tbox_ptr = a_tboxes.dataPtr();
-    const int threads_per_block = 128;
+    const int threads_per_block = 256;
 
     const amrex::Box sample_tbox(IntVect(AMREX_D_DECL(0, 0, 0)), a_tbox_max_size - 1);
     amrex::Box sample_tbox_x = convert(sample_tbox, jx_type);
@@ -1102,15 +1083,11 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
     const auto npts_z = sample_tbox_z.numPts();
 
     const auto npts = npts_x + npts_y + npts_z;
-    std::size_t shared_mem_bytes = npts*sizeof(double);
+    std::size_t shared_mem_bytes = npts*sizeof(amrex::Real);
     amrex::launch(
        nblocks, threads_per_block, shared_mem_bytes, amrex::Gpu::gpuStream(),
        [=] AMREX_GPU_DEVICE () noexcept
        {
-#if (defined AMREX_USE_GPU)
-            KernelTimer KnlTimer(cost && load_balance_costs_update_algo
-                                 == LoadBalanceCostsUpdateAlgo::GpuClock, cost_real);
-#endif
             const int bin_id = blockIdx.x;
             const int bin_start = offsets_ptr[bin_id];
             const int bin_stop = offsets_ptr[bin_id+1];
@@ -1132,10 +1109,9 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
             amrex::Array4<amrex::Real> zbuf(shared + npts_x+npts_y, amrex::begin(tbz), amrex::end(tbz), 1);
 
             // Zero out shared memory buffers
-            setValBox(tbx, xbuf, 0.0);
-            setValBox(tby, ybuf, 0.0);
-            setValBox(tbz, zbuf, 0.0);
-
+            for (int icell = threadIdx.x; icell < npts; icell += blockDim.x) {
+                shared[icell] = 0.0;
+            }
             __syncthreads();
 
             // loop over particles and deposit to shared buffer
@@ -1371,7 +1347,6 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
             addLocalToGlobal(tbz, Jz_arr, zbuf);
        }
     );
-    amrex::The_Managed_Arena()->free(cost_real);
 }
 
 #endif // CURRENTDEPOSITION_H_
