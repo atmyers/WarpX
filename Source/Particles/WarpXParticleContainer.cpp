@@ -382,7 +382,8 @@ WarpXParticleContainer::DepositCurrent(WarpXParIter& pti,
         ptile_tmp.define(ptile.NumRuntimeRealComps(), ptile.NumRuntimeIntComps());
         ptile_tmp.resize(ptile.numParticles());
 
-        const Box& box = pti.validbox();
+        Box box = pti.validbox();
+        box.grow(1);
         amrex::IntVect bin_size = WarpX::sort_bin_size;
         int ntiles = numTilesInBox(box, true, bin_size);
 
@@ -413,7 +414,8 @@ WarpXParticleContainer::DepositCurrent(WarpXParIter& pti,
         auto& aos   = ptile.GetArrayOfStructs();
         auto pstruct_ptr = aos().dataPtr();
 
-        const Box& box = pti.validbox();
+        Box box = pti.validbox();
+        box.grow(1);
         amrex::IntVect bin_size = WarpX::sort_bin_size;
 
         const auto offsets_ptr = bins.offsetsPtr();
@@ -463,6 +465,9 @@ WarpXParticleContainer::DepositCurrent(WarpXParIter& pti,
     amrex::Real* cost = costs ? &((*costs)[pti.index()]) : nullptr;
 
     const auto GetPosition = GetParticlePosition(pti, offset);
+    const Geometry& geom = Geom(lev);
+    Box box = pti.validbox();
+    box.grow(1);
 
     if (WarpX::current_deposition_algo == CurrentDepositionAlgo::Esirkepov) {
         if        (WarpX::nox == 1){
@@ -472,7 +477,7 @@ WarpXParticleContainer::DepositCurrent(WarpXParIter& pti,
                 jx_arr, jy_arr, jz_arr, jx_type, jy_type, jz_type,
                 np_to_depose, dt, dx, xyzmin, lo, q,
                 WarpX::n_rz_azimuthal_modes, cost,
-                WarpX::load_balance_costs_update_algo, bins, tboxes, max_tbox_size);
+                WarpX::load_balance_costs_update_algo, bins, box, geom, max_tbox_size);
         } else if (WarpX::nox == 2){
             doEsirkepovDepositionShapeNShared<2>(
                 GetPosition, wp.dataPtr() + offset, uxp.dataPtr() + offset,
@@ -480,7 +485,7 @@ WarpXParticleContainer::DepositCurrent(WarpXParIter& pti,
                 jx_arr, jy_arr, jz_arr, jx_type, jy_type, jz_type,
                 np_to_depose, dt, dx, xyzmin, lo, q,
                 WarpX::n_rz_azimuthal_modes, cost,
-                WarpX::load_balance_costs_update_algo, bins, tboxes, max_tbox_size);
+                WarpX::load_balance_costs_update_algo, bins, box, geom, max_tbox_size);
         } else if (WarpX::nox == 3){
             doEsirkepovDepositionShapeNShared<3>(
                 GetPosition, wp.dataPtr() + offset, uxp.dataPtr() + offset,
@@ -488,7 +493,7 @@ WarpXParticleContainer::DepositCurrent(WarpXParIter& pti,
                 jx_arr, jy_arr, jz_arr, jx_type, jy_type, jz_type,
                 np_to_depose, dt, dx, xyzmin, lo, q,
                 WarpX::n_rz_azimuthal_modes, cost,
-                WarpX::load_balance_costs_update_algo, bins, tboxes, max_tbox_size);
+                WarpX::load_balance_costs_update_algo, bins, box, geom, max_tbox_size);
         }
     } else if (WarpX::current_deposition_algo == CurrentDepositionAlgo::Vay) {
         if        (WarpX::nox == 1){

@@ -1019,7 +1019,8 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                                         amrex::Real* cost,
                                         const long load_balance_costs_update_algo,
                                         const amrex::DenseBins<WarpXParticleContainer::ParticleType>& a_bins,
-                                        const amrex::Gpu::DeviceVector<amrex::Box>& a_tboxes,
+                                        const amrex::Box& box,
+                                        const amrex::Geometry& geom,
                                         const amrex::IntVect& a_tbox_max_size)
 {
     using namespace amrex;
@@ -1060,13 +1061,12 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
 
     Real const clightsq = 1.0_rt / ( PhysConst::c * PhysConst::c );
 
-    // Loop over particles and deposit into Jx_arr, Jy_arr and Jz_arr
-    amrex::Real* cost_real = (amrex::Real*) amrex::The_Managed_Arena()->alloc(sizeof(amrex::Real));
-    *cost_real = 0.;
+    const auto dxiarr = geom.InvCellSizeArray();
+    const auto plo = geom.ProbLoArray();
+    const auto domain = geom.Domain();
 
     const int nblocks = a_bins.numBins();
     const auto offsets_ptr = a_bins.offsetsPtr();
-    const auto tbox_ptr = a_tboxes.dataPtr();
     const int threads_per_block = 256;
 
     const amrex::Box sample_tbox(IntVect(AMREX_D_DECL(0, 0, 0)), a_tbox_max_size - 1);
@@ -1084,6 +1084,7 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
 
     const auto npts = npts_x + npts_y + npts_z;
     std::size_t shared_mem_bytes = npts*sizeof(amrex::Real);
+    amrex::IntVect bin_size = WarpX::sort_bin_size;
     amrex::launch(
        nblocks, threads_per_block, shared_mem_bytes, amrex::Gpu::gpuStream(),
        [=] AMREX_GPU_DEVICE () noexcept
@@ -1092,7 +1093,17 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
             const int bin_start = offsets_ptr[bin_id];
             const int bin_stop = offsets_ptr[bin_id+1];
 
-            amrex::Box buffer_box = tbox_ptr[bin_id];
+            amrex::Box buffer_box;
+            {
+                ParticleReal xp, yp, zp;
+                GetPosition(bin_start, xp, yp, zp);
+                IntVect iv = IntVect(
+                    AMREX_D_DECL(int(amrex::Math::floor((xp-plo[0])*dxiarr[0])),
+                                 int(amrex::Math::floor((yp-plo[1])*dxiarr[1])),
+                                 int(amrex::Math::floor((zp-plo[2])*dxiarr[2]))));
+                iv += domain.smallEnd();
+                getTileIndex(iv, box, true, bin_size, buffer_box);
+            }
 
             Box tbx = convert( buffer_box, jx_type );
             Box tby = convert( buffer_box, jy_type );
@@ -1251,6 +1262,7 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                         sdxi += wqx*(sx_old[i] - sx_new[i])*((sy_new[j] + 0.5_rt*(sy_old[j] - sy_new[j]))*sz_new[k] +
                                                              (0.5_rt*sy_new[j] + 1._rt/3._rt*(sy_old[j] - sy_new[j]))*(sz_old[k] - sz_new[k]));
                         amrex::Gpu::Atomic::AddNoRet( &xbuf(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k), sdxi);
+                        //xbuf(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k) += sdxi;
                     }
                 }
             }
@@ -1261,6 +1273,7 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                         sdyj += wqy*(sy_old[j] - sy_new[j])*((sz_new[k] + 0.5_rt*(sz_old[k] - sz_new[k]))*sx_new[i] +
                                                              (0.5_rt*sz_new[k] + 1._rt/3._rt*(sz_old[k] - sz_new[k]))*(sx_old[i] - sx_new[i]));
                         amrex::Gpu::Atomic::AddNoRet( &ybuf(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k), sdyj);
+                        //ybuf(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k) += sdyj;
                     }
                 }
             }
@@ -1271,6 +1284,7 @@ void doEsirkepovDepositionShapeNShared (const GetParticlePosition& GetPosition,
                         sdzk += wqz*(sz_old[k] - sz_new[k])*((sx_new[i] + 0.5_rt*(sx_old[i] - sx_new[i]))*sy_new[j] +
                                                              (0.5_rt*sx_new[i] + 1._rt/3._rt*(sx_old[i] - sx_new[i]))*(sy_old[j] - sy_new[j]));
                         amrex::Gpu::Atomic::AddNoRet( &zbuf(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k), sdzk);
+                        //zbuf(lo.x+i_new-1+i, lo.y+j_new-1+j, lo.z+k_new-1+k) += sdzk;
                     }
                 }
             }
