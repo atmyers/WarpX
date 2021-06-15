@@ -419,6 +419,19 @@ MultiParticleContainer::Redistribute ()
 }
 
 void
+MultiParticleContainer::RedistributeHost ()
+{
+    using PinnedPC = amrex::AmrParticleContainer<0, 0, PIdx::nattribs, 0,
+                                                 amrex::PinnedArenaAllocator>;
+    for (auto& pc : allcontainers) {
+        PinnedPC tmp(&WarpX::GetInstance());
+        tmp.copyParticles(*pc);
+        tmp.RedistributeCPU();
+        pc->copyParticles(tmp);
+    }
+}
+
+void
 MultiParticleContainer::defineAllParticleTiles ()
 {
     for (auto& pc : allcontainers) {

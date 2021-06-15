@@ -99,7 +99,7 @@ WarpX::LoadBalance ()
     }
     if (loadBalancedAnyLevel)
     {
-        mypc->Redistribute();
+        mypc->RedistributeHost();
         mypc->defineAllParticleTiles();
     }
 #endif

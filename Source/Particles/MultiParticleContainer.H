@@ -175,6 +175,8 @@ public:
 
     void Redistribute ();
 
+    void RedistributeHost ();
+
     void defineAllParticleTiles ();
 
     void RedistributeLocal (const int num_ghost);
