@@ -18,6 +18,7 @@
     #include "Particles/ParticleCreation/FilterCreateTransformFromFAB.H"
 #endif
 
+#include <AMReX_AmrParticles.H>
 #include <AMReX_Vector.H>
 
 #include <limits>
