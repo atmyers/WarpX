@@ -72,7 +72,7 @@ WarpX::LoadBalance ()
         ParallelDescriptor::Bcast(&doLoadBalance, 1,
                                   ParallelDescriptor::IOProcessorNumber());
 
-	doLoadBalance = true;
+    doLoadBalance = true;
         if (doLoadBalance)
         {
             Vector<int> pmap;
