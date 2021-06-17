@@ -424,11 +424,12 @@ MultiParticleContainer::RedistributeHost ()
 {
     using PinnedPC = amrex::AmrParticleContainer<0, 0, PIdx::nattribs, 0,
                                                  amrex::PinnedArenaAllocator>;
+    const bool local = true;
     for (auto& pc : allcontainers) {
         PinnedPC tmp(&WarpX::GetInstance());
-        tmp.copyParticles(*pc);
+        tmp.copyParticles(*pc, local);
         tmp.RedistributeCPU();
-        pc->copyParticles(tmp);
+        pc->copyParticles(tmp, local);
     }
 }
 
