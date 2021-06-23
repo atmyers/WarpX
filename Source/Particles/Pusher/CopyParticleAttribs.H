@@ -44,8 +44,8 @@ struct CopyParticleAttribs
      *        This is needed because when we use field gather buffers we don't
      *        always start at the particle with index 0.
      */
-    define (const WarpXParIter& a_pti, TmpParticles& tmp_particle_data,
-            int a_offset = 0) noexcept
+    void define (const WarpXParIter& a_pti, TmpParticles& tmp_particle_data,
+                 int a_offset = 0) noexcept
     {
         if (tmp_particle_data.size() == 0) return;
 
