@@ -429,7 +429,7 @@ MultiParticleContainer::RedistributeHost ()
         PinnedPC tmp(&WarpX::GetInstance());
         tmp.copyParticles(*pc, local);
         tmp.RedistributeCPU();
-        pc->copyParticles(tmp, local);
+        pc->copyParticles(tmp);
     }
 }
 
