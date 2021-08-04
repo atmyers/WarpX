@@ -71,7 +71,7 @@ WarpX::Evolve (int numsteps)
 
     for (int step = istep[0]; step < numsteps_max && cur_time < stop_time; ++step)
     {
-        auto const evo_me     = [] (){
+        auto const evo_me     = [&] (){
         Real evolve_time_beg_step = amrex::second();
         multi_diags->NewIteration();
 
@@ -322,6 +322,15 @@ WarpX::Evolve (int numsteps)
             reduced_diags->WriteToFile(step);
         }
         multi_diags->FilterComputePackFlush( step );
+        };
+
+        if (step == 476) {
+            BL_PROFILE_REGION("EvolveLoopRegion");
+            evo_me();
+        }
+        else {
+            evo_me();
+        }
 
         if (cur_time >= stop_time - 1.e-3*dt[0]) {
             break;
@@ -334,14 +343,6 @@ WarpX::Evolve (int numsteps)
             amrex::Print() << "\n"; // better: conditional \n based on return value
             amrex::ParmParse().QueryUnusedInputs();
             early_params_checked = true;
-        }
-        };
-        if (step == 476) {
-            BL_PROFILE_REGION("EvolveLoopRegion");
-            evo_me();
-        }
-        else {
-            evo_me();
         }
 
         // End loop on time steps
