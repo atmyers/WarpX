@@ -336,7 +336,7 @@ WarpX::Evolve (int numsteps)
             early_params_checked = true;
         }
         };
-        if (step == 476) { 
+        if (step == 476) {
             BL_PROFILE_REGION("EvolveLoopRegion");
             evo_me();
         }
@@ -373,7 +373,7 @@ WarpX::OneStep_nosub (Real cur_time)
     if (warpx_py_afterdeposition) warpx_py_afterdeposition();
 
     // Synchronize J and rho
-    if (istep[0] == 231) { 
+    if (istep[0] == 231) {
         BL_PROFILE_REGION("SyncCurrentRegion");
         SyncCurrent();
     } else {
