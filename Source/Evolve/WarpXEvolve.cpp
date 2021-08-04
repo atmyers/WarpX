@@ -71,8 +71,8 @@ WarpX::Evolve (int numsteps)
 
     for (int step = istep[0]; step < numsteps_max && cur_time < stop_time; ++step)
     {
+        auto const evo_me     = [] (){
         Real evolve_time_beg_step = amrex::second();
-
         multi_diags->NewIteration();
 
         // Start loop on time steps
@@ -335,6 +335,14 @@ WarpX::Evolve (int numsteps)
             amrex::ParmParse().QueryUnusedInputs();
             early_params_checked = true;
         }
+        };
+        if (step == 476) { 
+            BL_PROFILE_REGION("EvolveLoopRegion");
+            evo_me();
+        }
+        else {
+            evo_me();
+        }
 
         // End loop on time steps
     }
@@ -365,7 +373,12 @@ WarpX::OneStep_nosub (Real cur_time)
     if (warpx_py_afterdeposition) warpx_py_afterdeposition();
 
     // Synchronize J and rho
-    SyncCurrent();
+    if (istep[0] == 231) { 
+        BL_PROFILE_REGION("SyncCurrentRegion");
+        SyncCurrent();
+    } else {
+        SyncCurrent();
+    }
     SyncRho();
 
     // Apply current correction in Fourier space: for periodic single-box global FFTs
