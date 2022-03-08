@@ -88,7 +88,6 @@ WarpX::LoadBalance ()
                                                  false,
                                                  ParallelDescriptor::IOProcessorNumber());
         } else if (! load_balanced_with_knapsack) {
-            load_balanced_with_knapsack++;
             amrex::Print() << "Load Balancing with Knapsack \n";
             newdm = DistributionMapping::makeKnapSack(*costs[lev],
                                                       currentEfficiency, proposedEfficiency,
@@ -97,7 +96,8 @@ WarpX::LoadBalance ()
                                                       ParallelDescriptor::IOProcessorNumber());
         } else {
             amrex::Print() << "Load Balancing with simple swapping \n";
-            newdm = DistributionMapping::makeSimpleSwapping(*costs[lev], 1.2,
+            newdm = DistributionMapping::makeSimpleSwapping(*costs[lev],
+                                                            currentEfficiency, proposedEfficiency, 1.2,
                                                             costs[lev]->DistributionMap(),
                                                             false,
                                                             ParallelDescriptor::IOProcessorNumber());
@@ -123,6 +123,8 @@ WarpX::LoadBalance ()
 
         if (doLoadBalance)
         {
+            if (! load_balance_with_sfc) { load_balanced_with_knapsack++; }
+
             Vector<int> pmap;
             if (ParallelDescriptor::MyProc() == ParallelDescriptor::IOProcessorNumber())
             {
