@@ -65,68 +65,103 @@ WarpX::LoadBalance ()
     // is called for any level
     int loadBalancedAnyLevel = false;
 
-    const int nLevels = finestLevel();
-    for (int lev = 0; lev <= nLevels; ++lev)
+    const int nLevels = finestLevel()+1;
+    amrex::Vector<amrex::Real> rcost;
+    amrex::Vector<int> current_pmap;
+    for (int lev = 0; lev < nLevels; ++lev)
     {
-        int doLoadBalance = false;
+        amrex::Vector<Real> rcost_lev(costs[lev]->size());
+        ParallelDescriptor::GatherLayoutDataToVector<Real>(*costs[lev], rcost_lev,
+                                        ParallelDescriptor::IOProcessorNumber());
+        rcost.insert(rcost.end(), rcost_lev.begin(), rcost_lev.end());
 
-        // Compute the new distribution mapping
-        DistributionMapping newdm;
-        const amrex::Real nboxes = costs[lev]->size();
-        const amrex::Real nprocs = ParallelContext::NProcsSub();
-        const int nmax = static_cast<int>(std::ceil(nboxes/nprocs*load_balance_knapsack_factor));
-        // These store efficiency (meaning, the  average 'cost' over all ranks,
-        // normalized to max cost) for current and proposed distribution mappings
-        amrex::Real currentEfficiency = 0.0;
-        amrex::Real proposedEfficiency = 0.0;
+        auto& pmap_lev = costs[lev]->DistributionMap().ProcessorMap();
+        current_pmap.insert(current_pmap.end(), pmap_lev.begin(), pmap_lev.end());        
+    }
 
-        newdm = (load_balance_with_sfc)
-            ? DistributionMapping::makeSFC(*costs[lev],
-                                           currentEfficiency, proposedEfficiency,
-                                           false,
-                                           ParallelDescriptor::IOProcessorNumber())
-            : DistributionMapping::makeKnapSack(*costs[lev],
-                                                currentEfficiency, proposedEfficiency,
-                                                nmax,
-                                                false,
-                                                ParallelDescriptor::IOProcessorNumber());
-        // As specified in the above calls to makeSFC and makeKnapSack, the new
-        // distribution mapping is NOT communicated to all ranks; the loadbalanced
-        // dm is up-to-date only on root, and we can decide whether to broadcast
-        if ((load_balance_efficiency_ratio_threshold > 0.0)
-            && (ParallelDescriptor::MyProc() == ParallelDescriptor::IOProcessorNumber()))
-        {
-            doLoadBalance = (proposedEfficiency > load_balance_efficiency_ratio_threshold*currentEfficiency);
+    int doLoadBalance = false;
+
+    amrex::Real currentEfficiency = 0.0;
+    amrex::Real proposedEfficiency = 0.0;
+    const amrex::Real nboxes = rcost.size();
+    const amrex::Real nprocs = ParallelContext::NProcsSub();
+    const int nmax = static_cast<int>(std::ceil(nboxes/nprocs*load_balance_knapsack_factor));
+
+    amrex::BoxArray refined_ba = boxArray(0);
+    for (int lev = 1; lev < nLevels; ++lev)
+    {
+        refined_ba.refine(refRatio(lev-1));
+        amrex::BoxList refined_bl = refined_ba.boxList();
+        refined_bl.join(boxArray(lev).boxList());
+        refined_ba = amrex::BoxArray(refined_bl);
+    }
+
+    amrex::Vector<amrex::DistributionMapping> newdm(nLevels);
+    amrex::DistributionMapping r;
+    if (ParallelDescriptor::IOProcessor())
+    {
+        std::vector<amrex::Long> cost(rcost.size());
+
+        amrex::Real wmax = *std::max_element(rcost.begin(), rcost.end());
+        amrex::Real scale = (wmax == 0) ? 1.e9_rt : 1.e9_rt/wmax;
+
+        for (int i = 0; i < rcost.size(); ++i) {
+            cost[i] = amrex::Long(rcost[i]*scale) + 1L;
         }
 
-        ParallelDescriptor::Bcast(&doLoadBalance, 1,
-                                  ParallelDescriptor::IOProcessorNumber());
+        // `sort` needs to be false here since there's a parallel reduce function
+        // in the processor map function, but we are executing only on root
+        int nprocs = ParallelDescriptor::NProcs();
+//        r.KnapSackProcessorMap(cost, nprocs, &proposedEfficiency, true, nmax, false);
+        r.SFCProcessorMap(refined_ba, cost, nprocs, proposedEfficiency, false);
 
-        if (doLoadBalance)
+        
+        amrex::DistributionMapping::ComputeDistributionMappingEfficiency(current_pmap,
+                                                                         rcost,
+                                                                         &currentEfficiency);
+    }
+
+    if ((load_balance_efficiency_ratio_threshold > 0.0) && (ParallelDescriptor::IOProcessor()))
+    {
+        doLoadBalance = (proposedEfficiency > load_balance_efficiency_ratio_threshold*currentEfficiency);
+    }
+
+    amrex::Print() << proposedEfficiency << "\n";
+    amrex::Print() << currentEfficiency << "\n";
+    amrex::Print() << doLoadBalance << "\n";
+        
+    ParallelDescriptor::Bcast(&doLoadBalance, 1,
+                              ParallelDescriptor::IOProcessorNumber());
+
+    if (doLoadBalance)
+    {
+        amrex::Vector<int> pmap(rcost.size());
+        if (ParallelDescriptor::IOProcessor())
         {
-            Vector<int> pmap;
-            if (ParallelDescriptor::MyProc() == ParallelDescriptor::IOProcessorNumber())
-            {
-                pmap = newdm.ProcessorMap();
-            } else
-            {
-                pmap.resize(static_cast<std::size_t>(nboxes));
-            }
-            ParallelDescriptor::Bcast(&pmap[0], pmap.size(), ParallelDescriptor::IOProcessorNumber());
+            pmap = r.ProcessorMap();
+        }
 
-            if (ParallelDescriptor::MyProc() != ParallelDescriptor::IOProcessorNumber())
-            {
-                newdm = DistributionMapping(pmap);
-            }
+        // Broadcast vector from which to construct new distribution mapping
+        ParallelDescriptor::Bcast(&pmap[0], pmap.size(), ParallelDescriptor::IOProcessorNumber());
 
-            RemakeLevel(lev, t_new[lev], boxArray(lev), newdm);
-
-            // Record the load balance efficiency
+        int lev_start = 0;
+        for (int lev = 0; lev < nLevels; ++lev)
+        {
+            amrex::Vector<int> pmap_lev(pmap.begin() + lev_start,
+                                        pmap.begin() + lev_start + costs[lev]->size());
+            newdm[lev] = amrex::DistributionMapping(pmap_lev);
+            lev_start += costs[lev]->size();
+        }
+     
+        for (int lev = 0; lev < nLevels; ++lev)
+        {
+            RemakeLevel(lev, t_new[lev], boxArray(lev), newdm[lev]);
             setLoadBalanceEfficiency(lev, proposedEfficiency);
         }
-
-        loadBalancedAnyLevel = loadBalancedAnyLevel || doLoadBalance;
     }
+
+    loadBalancedAnyLevel = loadBalancedAnyLevel || doLoadBalance;
+
     if (loadBalancedAnyLevel)
     {
         mypc->Redistribute();
