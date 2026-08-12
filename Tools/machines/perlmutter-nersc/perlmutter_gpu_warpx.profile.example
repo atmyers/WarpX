@@ -34,6 +34,10 @@ export LD_LIBRARY_PATH=${SW_DIR}/adios2-2.10.2/lib64:${LD_LIBRARY_PATH}
 export LD_LIBRARY_PATH=${SW_DIR}/blaspp-2024.05.31/lib64:${LD_LIBRARY_PATH}
 export LD_LIBRARY_PATH=${SW_DIR}/lapackpp-2024.05.31/lib64:${LD_LIBRARY_PATH}
 
+# optional: to use PETSC solvers and preconditioners in WarpX's implicit PIC mode
+export CMAKE_PREFIX_PATH=${SW_DIR}/petsc-3.24.0:${CMAKE_PREFIX_PATH}
+export LD_LIBRARY_PATH=${SW_DIR}/petsc-3.24.0/lib:${LD_LIBRARY_PATH}
+
 export PATH=${SW_DIR}/adios2-2.10.2/bin:${PATH}
 
 # optional: CCache

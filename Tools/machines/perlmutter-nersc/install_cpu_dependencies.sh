@@ -127,6 +127,42 @@ CXX=$(which CC) CXXFLAGS="-DLAPACK_FORTRAN_ADD_" cmake -S $HOME/src/lapackpp -B 
 cmake --build ${build_dir}/lapackpp-pm-cpu-build --target install --parallel ${PARALLEL}
 rm -rf ${build_dir}/lapackpp-pm-cpu-build
 
+# PETSC
+if [ -d $HOME/src/petsc ]
+then
+  cd $HOME/src/petsc
+  git fetch --prune
+  git checkout v3.24.0
+  cd -
+else
+  git clone -b v3.24.0 https://gitlab.com/petsc/petsc.git $HOME/src/petsc
+fi
+cd $HOME/src/petsc
+./configure               \
+    CC=${CC}   \
+    CXX=${CXX} \
+    FC=${FC}   \
+    COPTFLAGS="-g -O3"   \
+    FOPTFLAGS="-g -O3"   \
+    CXXOPTFLAGS="-g -O2" \
+    --prefix=${SW_DIR}/petsc-3.24.0  \
+    --with-batch                     \
+    --with-cmake=1                   \
+    --with-cuda=0                    \
+    --with-hip=0                     \
+    --with-fortran-bindings=0        \
+    --with-fftw=1                    \
+    --with-fftw-dir=${FFTW_ROOT}     \
+    --with-make-np=${build_procs}    \
+    ---with-openmp-kernels=1         \
+    --with-clean=1                   \
+    --with-debugging=0               \
+    --with-x=0                       \
+    --with-zlib=1
+make all
+make install
+cd -
+
 # Python ######################################################################
 #
 python3 -m pip install --upgrade pip

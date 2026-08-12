@@ -127,6 +127,44 @@ CXX=$(which CC) CXXFLAGS="-DLAPACK_FORTRAN_ADD_" cmake -S $HOME/src/lapackpp -B 
 cmake --build ${build_dir}/lapackpp-pm-gpu-build --target install --parallel ${PARALLEL}
 rm -rf ${build_dir}/lapackpp-pm-gpu-build
 
+# PETSC
+if [ -d $HOME/src/petsc ]
+then
+  cd $HOME/src/petsc
+  git fetch --prune
+  git checkout v3.24.0
+  cd -
+else
+  git clone -b v3.24.0 https://gitlab.com/petsc/petsc.git $HOME/src/petsc
+fi
+cd $HOME/src/petsc
+./configure               \
+    COPTFLAGS="-g -O3"    \
+    FOPTFLAGS="-g -O3"    \
+    CXXOPTFLAGS="-g -O2"  \
+    HIPOPTFLAGS="-g -O3"  \
+    LDFLAGS+="${LDFLAGS}" \
+    --prefix=${SW_DIR}/petsc-3.24.0  \
+    --with-batch                     \
+    --with-cmake=1                   \
+    --with-cuda=1                    \
+    --with-hip=0                     \
+    --with-cuda-dir=${CUDA_HOME}     \
+    --with-cuda-arch=80              \
+    --with-fortran-bindings=0        \
+    --with-fftw=0                    \
+    --download-kokkos                \
+    --download-kokkos-kernels        \
+    --with-make-np=${PARALLEL}       \
+    --with-mpi-dir=${MPICH_DIR}      \
+    --with-clean=1                   \
+    --with-debugging=0               \
+    --with-x=0                       \
+    --with-zlib=1
+make all
+make install
+cd -
+
 # Python ######################################################################
 #
 python3 -m pip install --upgrade pip
