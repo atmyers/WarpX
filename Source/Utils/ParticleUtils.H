@@ -186,6 +186,46 @@ namespace ParticleUtils {
     }
 
     /**
+     * \brief Rotate a vector by polar angle theta and azimuthal angle phi, with theta measured from
+     *        the original vector. The magnitude of the vector is preserved.
+     *
+     * @tparam T floating-point type of the vector components and angles
+     * @param[in,out] ux x-component of the vector
+     * @param[in,out] uy y-component of the vector
+     * @param[in,out] uz z-component of the vector
+     * @param[in] phi azimuthal angle phi in [0, 2pi)
+     * @param[in] costh cosine of polar angle theta; must be in [-1, 1]
+     */
+    template <typename T>
+    AMREX_GPU_HOST_DEVICE AMREX_INLINE
+    void rotateVector (T& ux, T& uy, T& uz, T phi, T costh)
+    {
+        AMREX_ASSERT(costh >= -T(1) && costh <= T(1));
+        const T cosph = std::cos(phi);
+        const T sinph = std::sin(phi);
+        const T sinth = std::sqrt(std::max(T(0), T(1) - costh*costh));
+
+        const T ux0 = ux;
+        const T uy0 = uy;
+        const T uz0 = uz;
+        const T u = std::sqrt(ux0*ux0 + uy0*uy0 + uz0*uz0);
+        const T uperp = std::sqrt(ux0*ux0 + uy0*uy0);
+
+        if (uperp == T(0)) {
+            ux = u*sinth*cosph;
+            uy = u*sinth*sinph;
+            uz = uz0*costh;
+        }
+        else {
+            const T nx = ux0/uperp;
+            const T ny = uy0/uperp;
+            ux = uz0*nx*sinth*cosph - u*ny*sinth*sinph + ux0*costh;
+            uy = uz0*ny*sinth*cosph + u*nx*sinth*sinph + uy0*costh;
+            uz = -uperp*sinth*cosph + uz0*costh;
+        }
+    }
+
+    /**
      * \brief Generate a random unit vector with isotropic distribution,
      * following the method described in equations (27)-(31) of
      * Higginson et al., J. Comput. Phys. 388 (2019), doi.org/10.1016/j.jcp.2019.03.020.
