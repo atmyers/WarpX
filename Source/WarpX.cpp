@@ -2319,6 +2319,12 @@ WarpX::MakeNewLevelFromScratch (int lev, Real time, const BoxArray& new_grids,
 {
     AllocLevelData(lev, new_grids, new_dmap);
     InitLevelData(lev, time);
+
+    // The dielectric geometry is needed before the particles are initialized,
+    // so that particles injected inside dielectric materials can be removed.
+    if (HasDielectricMaterials()) {
+        m_dielectric_materials->InitLevelData(*this, lev);
+    }
 }
 
 // This is a virtual function.

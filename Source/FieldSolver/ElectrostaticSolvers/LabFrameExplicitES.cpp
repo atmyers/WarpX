@@ -56,6 +56,13 @@ void LabFrameExplicitES::ComputeSpaceChargeField (
         warpx.ApplyRhofieldBoundary(lev, rho_fp[lev], PatchType::fine);
     }
 #endif
+
+    // Add the charge accumulated on dielectric materials by absorbed particles
+    if (warpx.HasDielectricMaterials()) {
+        for (int lev = 0; lev < num_levels; lev++) {
+            warpx.GetDielectricMaterials().AddSurfaceCharge(warpx, *rho_fp[lev], lev);
+        }
+    }
     // beta is zero in lab frame
     // Todo: use simpler finite difference form with beta=0
     const std::array<Real, 3> beta = {0._rt};

@@ -8,6 +8,8 @@
 #ifndef WARPX_DIELECTRICMATERIALS_H_
 #define WARPX_DIELECTRICMATERIALS_H_
 
+#include "Particles/MultiParticleContainer_fwd.H"
+
 #include <AMReX_Array.H>
 #include <AMReX_BaseFwd.H>
 #include <AMReX_IntVect.H>
@@ -35,6 +37,12 @@ public:
     void ReadParameters ();
 
     [[nodiscard]] bool hasDielectrics () const noexcept { return !m_materials.empty(); }
+    //! Whether particles entering a dielectric material are absorbed (and newly-injected
+    //! particles inside a dielectric material are removed)
+    [[nodiscard]] bool absorbsParticles () const noexcept
+    {
+        return hasDielectrics() && m_absorb_particles;
+    }
     [[nodiscard]] bool hasTimeDependentPermittivity () const noexcept
     {
         return m_has_time_dependent_permittivity;
@@ -59,6 +67,28 @@ public:
     void UpdateEpsilon (WarpX& warpx, int max_level, amrex::Real time);
 
     [[nodiscard]] amrex::iMultiFab const* MaterialID (int lev) const;
+
+    /**
+     * \brief Absorb the particles that have entered a dielectric material during the last push.
+     *
+     * Absorbed particles are moved back along their trajectory to the point where they crossed
+     * the dielectric surface (where the signed-distance function vanishes). Their charge is
+     * deposited there, with the particle shape factor, into the persistent
+     * dielectric_surface_charge field, and the particles are then removed.
+     *
+     * \param[in,out] mpc the particle species to scrape
+     * \param[in,out] warpx the WarpX instance that owns the dielectric fields
+     */
+    void ScrapeParticles (MultiParticleContainer& mpc, WarpX& warpx);
+
+    /**
+     * \brief Add the surface charge accumulated on the dielectric materials to the charge density.
+     *
+     * \param[in] warpx the WarpX instance that owns the dielectric fields
+     * \param[in,out] rho charge density, with the same layout as dielectric_surface_charge
+     * \param[in] lev mesh-refinement level
+     */
+    void AddSurfaceCharge (WarpX& warpx, amrex::MultiFab& rho, int lev) const;
 
 private:
     enum class ShapeType
@@ -122,6 +152,12 @@ private:
     std::vector<Material> m_materials;
     amrex::Vector<std::unique_ptr<amrex::iMultiFab> > m_material_id;
     bool m_has_time_dependent_permittivity = false;
+    int m_nlevs_max = 1;
+
+    //! Whether particles that enter a dielectric material are absorbed
+    bool m_absorb_particles = true;
+    //! Whether the charge of absorbed particles is kept as a surface charge
+    bool m_accumulate_surface_charge = true;
 };
 
 #endif // WARPX_DIELECTRICMATERIALS_H_

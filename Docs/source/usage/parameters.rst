@@ -1075,15 +1075,24 @@ lab-frame multigrid electrostatic solve. This feature requires an AMReX EB build
 is currently supported in 2D XZ, RZ, and 3D, and requires
 :pp:param:`warpx.do_electrostatic` to be ``labframe`` or
 ``labframe-electromagnetostatic``. Dielectric materials are not currently
-supported with the FFT Poisson solver, nonzero lab-frame Poisson ``beta``, or
-moving-window simulations.
+supported with the FFT Poisson solver, nonzero lab-frame Poisson ``beta``,
+mesh refinement, or moving-window simulations.
+
+By default, particles that enter a dielectric material are absorbed. Each absorbed
+particle is moved back along its trajectory to the point where it crossed the
+dielectric surface, and its charge is deposited there (with the particle shape
+factor) into a persistent surface-charge field. This field is added to the charge
+density in every subsequent Poisson solve, and is saved in checkpoints. Particles
+that are injected inside a dielectric material are removed, without depositing
+their charge.
 
 If dielectric materials overlap, the material listed latest in
 :pp:param:`dielectrics.names` takes precedence for the permittivity field and the
 diagnostic material-id mask. WarpX also builds a signed-distance field for the
 union of all dielectric materials. The diagnostic fields ``dielectric_epsilon``,
-``dielectric_signed_distance``, and ``dielectric_mask`` can be added explicitly
-to :pp:param:`<diag_name>.fields_to_plot`.
+``dielectric_signed_distance``, ``dielectric_mask``, and
+``dielectric_surface_charge`` can be added explicitly to
+:pp:param:`<diag_name>.fields_to_plot`.
 
 .. pp:param:: dielectrics.names
     :type: list of ``string``
@@ -1100,6 +1109,24 @@ to :pp:param:`<diag_name>.fields_to_plot`.
 
     Default value of :pp:param:`<dielectric_name>.stl_use_bvh` for all STL
     dielectric materials.
+
+.. pp:param:: dielectrics.absorb_particles
+    :type: ``0`` or ``1``
+    :default: ``1``
+    :optional:
+
+    Whether particles that enter a dielectric material are absorbed. If ``0``,
+    particles move through dielectric materials unaffected.
+
+.. pp:param:: dielectrics.accumulate_surface_charge
+    :type: ``0`` or ``1``
+    :default: ``1``
+    :optional:
+
+    Whether the charge of the particles absorbed by dielectric materials is kept as a
+    surface charge. If ``0``, absorbed particles are removed along with their charge.
+    Species with :pp:param:`<species_name>.do_not_deposit` do not contribute to the
+    surface charge.
 
 Each dielectric material must define exactly one geometry source, either an
 analytical implicit function or an STL file.
@@ -4568,7 +4595,7 @@ In-situ capabilities can be used by turning on Sensei or Ascent (provided they a
     :optional:
 
     Fields written to output.
-    Possible scalar fields: ``part_per_cell`` ``rho`` ``phi`` ``F`` ``part_per_grid`` ``proc_num`` ``divE`` ``divB`` ``eb_covered`` ``dielectric_epsilon`` ``dielectric_signed_distance`` ``dielectric_mask`` ``rho_<species_name>`` and ``T_<species_name>``, where ``<species_name>`` must match the name of one of the available particle species.
+    Possible scalar fields: ``part_per_cell`` ``rho`` ``phi`` ``F`` ``part_per_grid`` ``proc_num`` ``divE`` ``divB`` ``eb_covered`` ``dielectric_epsilon`` ``dielectric_signed_distance`` ``dielectric_mask`` ``dielectric_surface_charge`` ``rho_<species_name>`` and ``T_<species_name>``, where ``<species_name>`` must match the name of one of the available particle species.
     ``T_<species_name>`` is the temperature in eV (only valid for non-relativistic plasmas, since the code relies on the equipartition theorem to extract the temperature).
     With the hybrid-PIC solver (:pp:param:`algo.maxwell_solver` = ``hybrid``), the scalar fields ``Te`` (electron temperature in K: implied by the electron-pressure closure, or the evolved state variable when :pp:param:`hybrid_pic_model.solve_electron_energy_equation` is on) and ``Pe`` (electron pressure in Pa, as used in the Ohm's-law E-field solve) are also available.
     ``eb_covered`` is a number between 0 and 1 that indicates the fraction of the cell that is covered by the embedded boundary.

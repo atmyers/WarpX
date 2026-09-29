@@ -834,6 +834,10 @@ WarpX::InitData ()
     else
     {
         InitFromCheckpoint();
+        // When starting from scratch, this is done in MakeNewLevelFromScratch
+        if (HasDielectricMaterials()) {
+            m_dielectric_materials->InitData(*this);
+        }
         ::PrintDtDxDyDz(max_level, geom, dt);
         PostRestart();
         reduced_diags->InitData();
@@ -857,10 +861,6 @@ WarpX::InitData ()
             m_fields.get(FieldType::Efield_fp, Direction{1}, lev_zero)->ixType().toIntVect(),
             m_fields.get(FieldType::Efield_fp, Direction{2}, lev_zero)->ixType().toIntVect()
         );
-    }
-
-    if (HasDielectricMaterials()) {
-        m_dielectric_materials->InitData(*this);
     }
 
     m_electrostatic_solver->InitData();

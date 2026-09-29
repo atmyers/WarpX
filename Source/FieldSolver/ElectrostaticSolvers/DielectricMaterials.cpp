@@ -8,12 +8,19 @@
 #include "DielectricMaterials.H"
 
 #include "Fields.H"
+#include "Particles/MultiParticleContainer.H"
+#include "Particles/Pusher/GetAndSetPosition.H"
+#include "Particles/Pusher/UpdatePosition.H"
+#include "Particles/WarpXParticleContainer.H"
 #include "Utils/Parser/ParserUtils.H"
 #include "Utils/TextMsg.H"
 #include "WarpX.H"
 
+#include <ablastr/particles/NodalFieldGather.H>
+#include <ablastr/profiler/ProfilerWrapper.H>
 #include <ablastr/utils/Communication.H>
 
+#include <AMReX_Algorithm.H>
 #include <AMReX_Array4.H>
 #include <AMReX_Box.H>
 #include <AMReX_BoxArray.H>
@@ -26,6 +33,8 @@
 #include <AMReX_MFParallelFor.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_ParmParse.H>
+#include <AMReX_Particle.H>
+#include <AMReX_ParticleUtil.H>
 #include <AMReX_REAL.H>
 #include <AMReX_Vector.H>
 
@@ -37,6 +46,10 @@
 #   if defined(WARPX_DIM_3D)
 #       include <AMReX_EB_STL_utils.H>
 #   endif
+#endif
+
+#ifdef AMREX_USE_OMP
+#   include <omp.h>
 #endif
 
 #include <algorithm>
@@ -87,6 +100,24 @@ namespace
 
 namespace
 {
+    /** Interpolate the nodal signed-distance function at a Cartesian particle position. */
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+    amrex::Real
+    InterpSignedDistance (
+        amrex::ParticleReal const xp,
+        amrex::ParticleReal const yp,
+        amrex::ParticleReal const zp,
+        amrex::Array4<amrex::Real const> const& sdf,
+        amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> const& plo,
+        amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> const& dxi) noexcept
+    {
+        int i = 0, j = 0, k = 0;
+        amrex::Real W[AMREX_SPACEDIM][2];
+        ablastr::particles::compute_weights<amrex::IndexType::NODE>(
+            xp, yp, zp, plo, dxi, i, j, k, W);
+        return ablastr::particles::interp_field_nodal(i, j, k, W, sdf);
+    }
+
     void
     AssertPermittivityFunctionValues (
         amrex::MultiFab const& epsilon,
@@ -289,7 +320,7 @@ namespace
 }
 
 DielectricMaterials::DielectricMaterials (int nlevs_max)
-    : m_material_id(nlevs_max)
+    : m_material_id(nlevs_max), m_nlevs_max(nlevs_max)
 {}
 
 void
@@ -327,8 +358,15 @@ DielectricMaterials::ReadParameters ()
         "Dielectric materials are currently implemented only for 2D XZ, RZ, and 3D.");
 #endif
 
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        m_nlevs_max == 1,
+        "Dielectric materials are not compatible with mesh refinement yet.");
+
     int default_stl_use_bvh = 1;
     pp_dielectrics.query("stl_use_bvh", default_stl_use_bvh);
+
+    pp_dielectrics.query("absorb_particles", m_absorb_particles);
+    pp_dielectrics.query("accumulate_surface_charge", m_accumulate_surface_charge);
 
     m_materials.clear();
     m_has_time_dependent_permittivity = false;
@@ -440,6 +478,23 @@ DielectricMaterials::AllocLevelData (
 
     warpx.AllocInitMultiFab(
         m_material_id[lev], nodal_ba, dm, 1, ng_sdf, lev, "dielectric_material_id", 0);
+
+    if (m_absorb_particles && m_accumulate_surface_charge) {
+        // The surface charge is added to rho before the Poisson solve,
+        // so it uses the same staggering, components and guard cells as rho.
+        // It persists across time steps, so it must be redistributed and checkpointed.
+        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+            warpx.GetMultiFabRegister().has(FieldType::rho_fp, lev),
+            "Dielectric materials require rho_fp to be allocated before the surface charge.");
+        amrex::MultiFab const* rho = warpx.GetMultiFabRegister().get(FieldType::rho_fp, lev);
+        bool const remake = true;
+        bool const redistribute_on_remake = true;
+        bool const checkpoint_restart = true;
+        warpx.GetMultiFabRegister().alloc_init(
+            FieldType::dielectric_surface_charge, lev, rho->boxArray(), dm,
+            WarpX::ncomps, rho->nGrowVect(), 0.0_rt,
+            remake, redistribute_on_remake, checkpoint_restart);
+    }
 }
 
 void
@@ -512,6 +567,156 @@ DielectricMaterials::MaterialID (int const lev) const
 {
     if (lev >= static_cast<int>(m_material_id.size())) { return nullptr; }
     return m_material_id[lev].get();
+}
+
+void
+DielectricMaterials::ScrapeParticles (MultiParticleContainer& mpc, WarpX& warpx)
+{
+    if (!absorbsParticles()) { return; }
+
+    ABLASTR_PROFILE("DielectricMaterials::ScrapeParticles");
+
+    using warpx::fields::FieldType;
+    using PTDType = WarpXParticleContainer::ParticleTileType::ParticleTileDataType;
+
+    // Mesh refinement is not supported yet (see ReadParameters)
+    int const lev = 0;
+
+    auto& fields = warpx.GetMultiFabRegister();
+    amrex::MultiFab const& sdf = *fields.get(FieldType::dielectric_signed_distance, lev);
+
+    // Charge deposited by the particles absorbed during this call
+    std::unique_ptr<amrex::MultiFab> new_charge;
+    if (m_accumulate_surface_charge) {
+        amrex::MultiFab const& surface_charge =
+            *fields.get(FieldType::dielectric_surface_charge, lev);
+        new_charge = std::make_unique<amrex::MultiFab>(
+            surface_charge.boxArray(), surface_charge.DistributionMap(),
+            surface_charge.nComp(), surface_charge.nGrowVect());
+        new_charge->setVal(0.0_rt);
+    }
+
+    amrex::Geometry const& geom = warpx.Geom(lev);
+    auto const plo = geom.ProbLoArray();
+    auto const dxi = geom.InvCellSizeArray();
+    amrex::Real const dt = warpx.getdt(lev);
+
+    for (int ispecies = 0; ispecies < mpc.nSpecies(); ++ispecies)
+    {
+        auto& pc = mpc.GetParticleContainer(ispecies);
+        amrex::ParticleReal const mass = pc.getMass();
+        bool const deposit = m_accumulate_surface_charge && !pc.do_not_deposit;
+        bool const do_ionization = pc.DoFieldIonization() != 0;
+
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
+        {
+#ifdef AMREX_USE_OMP
+        int const thread_num = omp_get_thread_num();
+#else
+        int const thread_num = 0;
+#endif
+        for (WarpXParIter pti(pc, lev); pti.isValid(); ++pti)
+        {
+            auto& ptile = pti.GetParticleTile();
+            auto const np = static_cast<int>(ptile.numParticles());
+            if (np == 0) { continue; }
+
+            auto const getPosition = GetParticlePosition<PIdx>(pti);
+            auto const setPosition = SetParticlePosition<PIdx>(pti);
+            auto const sdf_arr = sdf.const_array(pti);
+
+            // Move the particles that are inside a dielectric material to the end of the tile.
+            // Particles already flagged for removal (e.g. by a conductor EB) are left alone.
+            int const num_outside = amrex::partitionParticles(ptile,
+                [=] AMREX_GPU_HOST_DEVICE (PTDType const& ptd, int const ip) -> bool
+                {
+                    if (!amrex::ParticleIDWrapper{ptd.m_idcpu[ip]}.is_valid()) { return true; }
+                    amrex::ParticleReal xp, yp, zp;
+                    getPosition(ip, xp, yp, zp);
+                    return InterpSignedDistance(xp, yp, zp, sdf_arr, plo, dxi) >= 0.0_rt;
+                });
+            int const num_inside = np - num_outside;
+            if (num_inside == 0) { continue; }
+
+            // Move the absorbed particles back along their trajectory,
+            // to the point where they crossed the dielectric surface.
+            auto const ptd = ptile.getParticleTileData();
+            amrex::ParallelFor(num_inside, [=] AMREX_GPU_DEVICE (int const ii) noexcept
+            {
+                int const ip = num_outside + ii;
+                amrex::ParticleReal xp, yp, zp;
+                getPosition(ip, xp, yp, zp);
+                amrex::ParticleReal const ux = ptd.m_rdata[PIdx::ux][ip];
+                amrex::ParticleReal const uy = ptd.m_rdata[PIdx::uy][ip];
+                amrex::ParticleReal const uz = ptd.m_rdata[PIdx::uz][ip];
+
+                // Signed distance at the position the particle had a fraction dt_frac of
+                // the time step before its current position
+                auto const sdf_before = [=] (amrex::Real const dt_frac) -> amrex::Real
+                {
+                    amrex::ParticleReal x = xp, y = yp, z = zp;
+                    UpdatePosition(x, y, z, ux, uy, uz, -dt_frac*dt, mass);
+                    return InterpSignedDistance(x, y, z, sdf_arr, plo, dxi);
+                };
+
+                // A particle that was already inside at the start of the step has
+                // no crossing point; its charge is deposited at its current position.
+                amrex::Real dt_fraction = 0.0_rt;
+                if (sdf_before(1.0_rt) >= 0.0_rt) {
+                    dt_fraction = amrex::bisect(0.0_rt, 1.0_rt, sdf_before);
+                }
+
+                UpdatePosition(xp, yp, zp, ux, uy, uz, -dt_fraction*dt, mass);
+                setPosition(ip, xp, yp, zp);
+            });
+
+            if (deposit) {
+                int const* ion_lev = nullptr;
+                if (do_ionization) {
+                    // DepositCharge offsets the positions and weights, but not the ionization level
+                    ion_lev = pti.GetiAttribs("ionizationLevel").dataPtr() + num_outside;
+                }
+                pc.DepositCharge(pti, pti.GetAttribs(PIdx::w), ion_lev, new_charge.get(), 0,
+                                 num_outside, num_inside, thread_num, lev, lev);
+            }
+
+            // Remove the absorbed particles
+            amrex::Gpu::streamSynchronize();
+            ptile.resize(num_outside);
+        }
+        }
+    }
+
+    if (new_charge) {
+#if defined(WARPX_DIM_RZ) || defined(WARPX_DIM_RCYLINDER) || defined(WARPX_DIM_RSPHERE)
+        warpx.ApplyInverseVolumeScalingToChargeDensity(new_charge.get(), lev);
+#endif
+        ablastr::utils::communication::SumBoundary(
+            *new_charge, 0, new_charge->nComp(), new_charge->nGrowVect(),
+            new_charge->nGrowVect(), WarpX::do_single_precision_comms, geom.periodicity());
+#if !defined(WARPX_DIM_RZ) && !defined(WARPX_DIM_RCYLINDER) && !defined(WARPX_DIM_RSPHERE)
+        // Reflect the charge deposited in the guard cells over PEC boundaries, if needed
+        warpx.ApplyRhofieldBoundary(lev, new_charge.get(), PatchType::fine);
+#endif
+        amrex::MultiFab& surface_charge = *fields.get(FieldType::dielectric_surface_charge, lev);
+        amrex::MultiFab::Add(
+            surface_charge, *new_charge, 0, 0, surface_charge.nComp(), surface_charge.nGrowVect());
+    }
+}
+
+void
+DielectricMaterials::AddSurfaceCharge (WarpX& warpx, amrex::MultiFab& rho, int const lev) const
+{
+    if (!absorbsParticles() || !m_accumulate_surface_charge) { return; }
+
+    using warpx::fields::FieldType;
+
+    amrex::MultiFab const& surface_charge =
+        *warpx.GetMultiFabRegister().get(FieldType::dielectric_surface_charge, lev);
+    amrex::MultiFab::Add(
+        rho, surface_charge, 0, 0, surface_charge.nComp(), surface_charge.nGrowVect());
 }
 
 void
