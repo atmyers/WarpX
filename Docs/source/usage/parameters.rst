@@ -4342,13 +4342,13 @@ Additional parameters
 
 .. pp:param:: warpx.sort_particles_for_deposition
     :type: ``bool``
-    :default: ``true`` for the CUDA backend and AMD ``gfx942`` GPUs, otherwise ``false``
+    :default: ``true`` for the CUDA and HIP backends, otherwise ``false``
     :optional:
 
     This option controls the type of sorting used if particle sorting is turned on, i.e. if ``sort_intervals`` is not ``<=0``.
     If ``true``, particles will be sorted by cell to optimize deposition with many particles per cell, in the order x -> y -> z -> ppc.
     If ``false``, particles will be sorted by bin, using the ``sort_bin_size`` parameter below, in the order ppc -> x -> y -> z.
-    ``true`` is recommended for best performance on NVIDIA and AMD ``gfx942`` GPUs, especially if
+    ``true`` is recommended for best performance on NVIDIA and AMD GPUs, especially if
     there are many particles per cell.
 
 .. pp:param:: warpx.sort_idx_type

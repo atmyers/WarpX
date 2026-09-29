@@ -1543,13 +1543,6 @@ WarpX::ReadParameters ()
             }
         }
 
-#if defined(AMREX_USE_HIP)
-        amrex::gpuDeviceProp_t device_properties;
-        AMREX_HIP_SAFE_CALL(hipGetDeviceProperties(
-            &device_properties, amrex::Gpu::Device::deviceId()));
-        m_sort_particles_for_deposition =
-            std::string(device_properties.gcnArchName).rfind("gfx942", 0) == 0;
-#endif
         pp_warpx.query("sort_particles_for_deposition",m_sort_particles_for_deposition);
         Vector<int> vect_sort_idx_type(AMREX_SPACEDIM,0);
         const bool sort_idx_type_is_specified =
