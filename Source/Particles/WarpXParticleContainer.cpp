@@ -1743,9 +1743,9 @@ WarpXParticleContainer::DepositCharge (WarpXParIter& pti, RealVector const& wp,
         ABLASTR_PROFILE_VAR_START(blp_ppc_chd);
 
         const auto GetPosition = GetParticlePosition<PIdx>(pti, offset);
-    // Like the other particle attributes, ion_lev points to the start of the tile:
-    // offset it so that the kernels deposit particles [offset, offset+np_to_deposit)
-    int const * const ion_lev_offset = (ion_lev != nullptr) ? ion_lev + offset : nullptr;
+        // Like the other particle attributes, ion_lev points to the start of the tile:
+        // offset it so that the kernels deposit particles [offset, offset+np_to_deposit)
+        int const * const ion_lev_offset = (ion_lev != nullptr) ? ion_lev + offset : nullptr;
         const Geometry& geom = Geom(lev);
         Box box = pti.validbox();
         box.grow(ng_rho);
