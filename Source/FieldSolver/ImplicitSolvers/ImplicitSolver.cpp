@@ -787,7 +787,7 @@ void ImplicitSolver::InitializeMassMatrices ()
                 "Mass matrices for Jacobian with Villasenor deposition are not yet implemented "
                 "in 3D. Use algo.current_deposition = direct.");
 #else
-            const int max_grid_crossings = ngJ[0] - shape + 1;
+            const int max_grid_crossings = ngJ[0] - shape / 2;
             WARPX_ALWAYS_ASSERT_WITH_MESSAGE(max_grid_crossings > 0,
                 "Mass Matrices for Jacobian with Villasenor deposition requires particles.max_grid_crossings > 0.");
             WARPX_ALWAYS_ASSERT_WITH_MESSAGE(max_grid_crossings == WarpX::particle_max_grid_crossings,
