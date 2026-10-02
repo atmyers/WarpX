@@ -65,7 +65,9 @@ else:
     n_coarse = len(z_th) // cells_per_bin
     n_fine = n_coarse * cells_per_bin
     sim_coarse = sim_flux["H"][:n_fine].reshape(n_coarse, cells_per_bin).mean(axis=1)
-    theory_coarse = theory_flux["H"][:n_fine].reshape(n_coarse, cells_per_bin).mean(axis=1)
+    theory_coarse = (
+        theory_flux["H"][:n_fine].reshape(n_coarse, cells_per_bin).mean(axis=1)
+    )
     assert np.allclose(sim_coarse[1:], theory_coarse[1:], atol=5e-2 * flux)
 
 # Plot the computed fluxes

@@ -74,7 +74,9 @@ decay_theory = (Tx - Ty) / (Tx0 - Ty0)
 tolerance = 0.05
 error = abs(decay_sim - decay_theory) / decay_theory
 
-print(f"decay of Tx - Ty after {nt} steps: simulation {decay_sim}, theory {decay_theory}")
+print(
+    f"decay of Tx - Ty after {nt} steps: simulation {decay_sim}, theory {decay_theory}"
+)
 print(f"error = {error}")
 print(f"tolerance = {tolerance}")
 assert error < tolerance
