@@ -29,30 +29,47 @@ namespace ParticleUtils
     using ParticleType = typename WarpXParticleContainer::ParticleType;
     using ParticleBins = DenseBins<ParticleTileDataType>;
 
-    /* Find the particles and count the particles that are in each supercell.
+    /* Find the particles and count the particles that are in each bin.
        Note that this does *not* rearrange particle arrays */
     amrex::DenseBins<ParticleTileDataType>
-    findParticlesInEachSuperCell (amrex::Geometry const& geom_lev,
-                  amrex::MFIter const & mfi,
-                  ParticleTileType & ptile,
-                  const amrex::IntVect& supercell_size) {
+    findParticlesInEachBin (amrex::Geometry const& geom_lev,
+                            amrex::MFIter const & mfi,
+                            ParticleTileType & ptile,
+                            BinSizeRatio const& bin_ratio) {
 
-        // Extract number of particles for this tile
+        // Extract particle structures for this tile
         int const np = ptile.numParticles();
+        auto ptd = ptile.getParticleTileData();
 
         // Extract box properties
-        Box const& box = mfi.tilebox(IntVect::TheZeroVector()); // Cell-centered box
+        Box const& cbx = mfi.tilebox(IntVect::TheZeroVector()); //Cell-centered box
+        Box const bin_box = bin_ratio.binBox(cbx);
+        IntVect const bin_lo = bin_box.smallEnd();
+        IntVect const domain_lo = geom_lev.Domain().smallEnd();
+        IntVect const crse = bin_ratio.coarsen;
+        IntVect const ref = bin_ratio.refine;
         const auto dxi = geom_lev.InvCellSizeArray();
         const auto plo = geom_lev.ProbLoArray();
-        const auto domain = geom_lev.Domain();
 
-    int ntiles = amrex::numTilesInBox(box, true, supercell_size);
-
-    // Find particles that are in each cell;
+        // Find particles that are in each bin;
         // results are stored in the object `bins`.
         ParticleBins bins;
-    bins.build(np, ptile.getParticleTileData(), ntiles,
-           amrex::GetParticleBin{plo, dxi, domain, supercell_size, box});
+        bins.build(np, ptd, bin_box,
+            // Pass lambda function that returns the bin index, relative to the lower corner
+            // of `bin_box`. Particles outside of `bin_box` are put in the closest bin by `build`.
+            [=] AMREX_GPU_DEVICE (ParticleType const & p) noexcept -> amrex::IntVect
+            {
+                IntVect iv;
+                for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+                    // Index of the particle on the grid refined by `ref`, in the global index space
+                    int const i_fine = static_cast<int>(
+                        amrex::Math::floor((p.pos(idim)-plo[idim])*dxi[idim]*ref[idim]))
+                        + domain_lo[idim]*ref[idim];
+                    iv[idim] = amrex::coarsen(i_fine, crse[idim]) - bin_lo[idim];
+                }
+                return iv;
+            });
+
         return bins;
     }
 
@@ -60,9 +77,9 @@ namespace ParticleUtils
        Note that this does *not* rearrange particle arrays */
     amrex::DenseBins<ParticleTileDataType>
     findParticlesInEachCell (amrex::Geometry const& geom_lev,
-                 amrex::MFIter const & mfi,
-                 ParticleTileType & ptile) {
-    return findParticlesInEachSuperCell(geom_lev, mfi, ptile, amrex::IntVect(AMREX_D_DECL(1, 1, 1)));
+                             amrex::MFIter const & mfi,
+                             ParticleTileType & ptile) {
+        return findParticlesInEachBin(geom_lev, mfi, ptile, BinSizeRatio{});
     }
 
 } // namespace ParticleUtils
