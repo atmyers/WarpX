@@ -34,6 +34,7 @@
 #include <AMReX_MultiFab.H>
 #include <AMReX_ParmParse.H>
 #include <AMReX_Particle.H>
+#include <AMReX_ParticleTransformation.H>
 #include <AMReX_ParticleUtil.H>
 #include <AMReX_REAL.H>
 #include <AMReX_Vector.H>
@@ -116,6 +117,50 @@ namespace
         ablastr::particles::compute_weights<amrex::IndexType::NODE>(
             xp, yp, zp, plo, dxi, i, j, k, W);
         return ablastr::particles::interp_field_nodal(i, j, k, W, sdf);
+    }
+
+    /** Reflect a Cartesian particle position back into the domain,
+     *  across the non-periodic domain boundaries that it is outside of. */
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+    void
+    ReflectIntoDomain (
+        amrex::ParticleReal& xp,
+        amrex::ParticleReal& yp,
+        amrex::ParticleReal& zp,
+        amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> const& plo,
+        amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> const& phi,
+        amrex::GpuArray<int, AMREX_SPACEDIM> const& is_periodic) noexcept
+    {
+        auto const reflect = [&] (amrex::ParticleReal& x, int const idim)
+        {
+            if (is_periodic[idim]) { return; }
+            if (x < plo[idim]) {
+                x = 2.0_prt*plo[idim] - x;
+            } else if (x > phi[idim]) {
+                x = 2.0_prt*phi[idim] - x;
+            }
+        };
+#if defined(WARPX_DIM_RZ)
+        amrex::ParticleReal const r = std::sqrt(xp*xp + yp*yp);
+        amrex::ParticleReal r_reflected = r;
+        reflect(r_reflected, 0);
+        if (r_reflected != r) {
+            if (r > 0.0_prt) {
+                xp *= r_reflected/r;
+                yp *= r_reflected/r;
+            } else {
+                xp = r_reflected;
+            }
+        }
+#else
+        reflect(xp, 0);
+#   if defined(WARPX_DIM_3D)
+        reflect(yp, 1);
+#   else
+        amrex::ignore_unused(yp);
+#   endif
+#endif
+        reflect(zp, WARPX_ZINDEX);
     }
 
     void
@@ -598,6 +643,8 @@ DielectricMaterials::ScrapeParticles (MultiParticleContainer& mpc, WarpX& warpx)
 
     amrex::Geometry const& geom = warpx.Geom(lev);
     auto const plo = geom.ProbLoArray();
+    auto const phi = geom.ProbHiArray();
+    auto const is_periodic = geom.isPeriodicArray();
     auto const dxi = geom.InvCellSizeArray();
     amrex::Real const dt = warpx.getdt(lev);
 
@@ -608,14 +655,21 @@ DielectricMaterials::ScrapeParticles (MultiParticleContainer& mpc, WarpX& warpx)
         bool const deposit = m_accumulate_surface_charge && !pc.do_not_deposit;
         bool const do_ionization = pc.DoFieldIonization() != 0;
 
+        // The absorbed particles are moved back to where they crossed the dielectric surface,
+        // which can be several cells outside of the tile that owns them (the time step is not
+        // limited by the particle speed). Before depositing their charge, they are therefore
+        // collected in a temporary container and redistributed.
+        auto absorbed = pc.make_alike();
+        if (deposit) {
+            absorbed.SetArena(pc.arena());
+            // Define the tiles serially, since this modifies the container's map of tiles
+            for (WarpXParIter pti(pc, lev); pti.isValid(); ++pti) {
+                absorbed.DefineAndReturnParticleTile(lev, pti);
+            }
+        }
+
 #ifdef AMREX_USE_OMP
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
-#endif
-        {
-#ifdef AMREX_USE_OMP
-        int const thread_num = omp_get_thread_num();
-#else
-        int const thread_num = 0;
 #endif
         for (WarpXParIter pti(pc, lev); pti.isValid(); ++pti)
         {
@@ -653,11 +707,15 @@ DielectricMaterials::ScrapeParticles (MultiParticleContainer& mpc, WarpX& warpx)
                 amrex::ParticleReal const uz = ptd.m_rdata[PIdx::uz][ip];
 
                 // Signed distance at the position the particle had a fraction dt_frac of
-                // the time step before its current position
+                // the time step before its current position.
+                // A particle reflected at a domain boundary during this time step has
+                // a reflected velocity: moving it back crosses that boundary, and the
+                // position is reflected back into the domain to follow its actual trajectory.
                 auto const sdf_before = [=] (amrex::Real const dt_frac) -> amrex::Real
                 {
                     amrex::ParticleReal x = xp, y = yp, z = zp;
                     UpdatePosition(x, y, z, ux, uy, uz, -dt_frac*dt, mass);
+                    ReflectIntoDomain(x, y, z, plo, phi, is_periodic);
                     return InterpSignedDistance(x, y, z, sdf_arr, plo, dxi);
                 };
 
@@ -669,22 +727,67 @@ DielectricMaterials::ScrapeParticles (MultiParticleContainer& mpc, WarpX& warpx)
                 }
 
                 UpdatePosition(xp, yp, zp, ux, uy, uz, -dt_fraction*dt, mass);
+                ReflectIntoDomain(xp, yp, zp, plo, phi, is_periodic);
                 setPosition(ip, xp, yp, zp);
             });
 
             if (deposit) {
-                int const* ion_lev = nullptr;
-                if (do_ionization) {
-                    // DepositCharge offsets the positions and weights, but not the ionization level
-                    ion_lev = pti.GetiAttribs("ionizationLevel").dataPtr() + num_outside;
-                }
-                pc.DepositCharge(pti, pti.GetAttribs(PIdx::w), ion_lev, new_charge.get(), 0,
-                                 num_outside, num_inside, thread_num, lev, lev);
+                auto& absorbed_tile = absorbed.ParticlesAt(lev, pti);
+                absorbed_tile.resize(num_inside);
+                amrex::copyParticles(absorbed_tile, ptile, num_outside, 0, num_inside);
             }
 
             // Remove the absorbed particles
             amrex::Gpu::streamSynchronize();
             ptile.resize(num_outside);
+        }
+
+        if (!deposit) { continue; }
+
+        absorbed.Redistribute();
+
+        // Temporarily append the absorbed particles to the tiles of pc that now own them,
+        // so that they are deposited with the same algorithm as the rest of the charge.
+        // This is done serially, since defining tiles modifies the container's map of tiles.
+        for (auto& [key, absorbed_tile] : absorbed.GetParticles(lev)) {
+            auto const num_absorbed = static_cast<int>(absorbed_tile.numParticles());
+            if (num_absorbed == 0) { continue; }
+            auto& ptile = pc.DefineAndReturnParticleTile(lev, key.first, key.second);
+            auto const np = static_cast<int>(ptile.numParticles());
+            ptile.resize(np + num_absorbed);
+            amrex::copyParticles(ptile, absorbed_tile, 0, np, num_absorbed);
+        }
+
+        auto const& absorbed_tiles = absorbed.GetParticles(lev);
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
+        {
+#ifdef AMREX_USE_OMP
+        int const thread_num = omp_get_thread_num();
+#else
+        int const thread_num = 0;
+#endif
+        for (WarpXParIter pti(pc, lev); pti.isValid(); ++pti)
+        {
+            auto const it = absorbed_tiles.find(std::make_pair(pti.index(), pti.LocalTileIndex()));
+            if (it == absorbed_tiles.end()) { continue; }
+            auto const num_absorbed = static_cast<long>(it->second.numParticles());
+            if (num_absorbed == 0) { continue; }
+
+            auto& ptile = pti.GetParticleTile();
+            auto const offset = static_cast<long>(ptile.numParticles()) - num_absorbed;
+
+            int const* ion_lev = nullptr;
+            if (do_ionization) {
+                ion_lev = pti.GetiAttribs("ionizationLevel").dataPtr();
+            }
+            pc.DepositCharge(pti, pti.GetAttribs(PIdx::w), ion_lev, new_charge.get(), 0,
+                             offset, num_absorbed, thread_num, lev, lev);
+
+            // Remove the absorbed particles again
+            amrex::Gpu::streamSynchronize();
+            ptile.resize(offset);
         }
         }
     }

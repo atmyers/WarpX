@@ -22,6 +22,9 @@ z_slab_lo, z_slab_hi = 5.0e-3, 7.0e-3
 epsilon_r = 4.0
 
 filename = sys.argv[1]
+# Optional: position of the lower surface of the slab, if it differs from the base inputs file
+if len(sys.argv) > 2:
+    z_slab_lo = float(sys.argv[2])
 
 # Particle weights, as a function of time
 # columns: step, time, total_macroparticles, electrons_macroparticles,
